@@ -18,7 +18,9 @@ from models import Startup
 
 EDGAR_SEARCH_URL = "https://efts.sec.gov/LATEST/search-index"
 EDGAR_HEADERS = {
-    "User-Agent": "startup-radar-template (github.com/xavierahojjx-afk/startup-radar-template)",
+    # SEC requires a User-Agent matching "Company/App Name contact-email" — a bare
+    # app name or URL gets a 403. See https://www.sec.gov/os/webmaster-faq#developers
+    "User-Agent": "Startup Radar contact@startupradar.local",
     "Accept": "application/json",
 }
 
