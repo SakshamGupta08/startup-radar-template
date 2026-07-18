@@ -78,8 +78,18 @@ def _extract_body(payload: dict) -> str:
 
 _AMOUNT_RE = re.compile(r"\$\s*[\d,.]+\s*(?:B|M|billion|million)\b", re.IGNORECASE)
 _STAGE_RE = re.compile(r"\b(Pre-?Seed|Seed|Series\s+[A-F]\d?\+?)\b", re.IGNORECASE)
+_COMPANY_TOKEN = r"[A-Z][\w\-.&']*"
 _COMPANY_RE = re.compile(
-    r"\b([A-Z][\w\-.&']{1,40}?)\s+(?:raises|raised|secures|closes|nabs|announces)\s+",
+    rf"\b({_COMPANY_TOKEN}(?:\s+{_COMPANY_TOKEN}){{0,3}})"
+    r"\s+(?:(?i:raises|raised|secures|closes|nabs|announces))\s+"
+)
+# Funding-round context — a dollar amount alone isn't enough (e.g. "posted a
+# record quarterly profit of $22 billion... and raised its spending forecast"
+# matches _COMPANY_RE + _AMOUNT_RE but is not a startup funding event). Require
+# an explicit stage or investor/round phrase near the amount too.
+_ROUND_CONTEXT_RE = re.compile(
+    r"\b(in funding|in a round|in seed|in Series|led by|backed by|valuation|"
+    r"venture round|funding round)\b",
     re.IGNORECASE,
 )
 
@@ -95,6 +105,10 @@ def _parse_body(text: str, subject: str) -> list[Startup]:
 
         amount = _AMOUNT_RE.search(snippet)
         stage = _STAGE_RE.search(snippet)
+        if not amount:
+            continue
+        if not stage and not _ROUND_CONTEXT_RE.search(snippet):
+            continue
 
         found.append(Startup(
             company_name=m.group(1).strip(),
@@ -104,6 +118,18 @@ def _parse_body(text: str, subject: str) -> list[Startup]:
             source=f"Gmail: {subject[:40]}",
         ))
     return found
+
+
+# Per-sender parsers — add an entry here (and wire it in `_PARSERS` below) once
+# you've seen enough of a newsletter's format to warrant bespoke extraction
+# instead of the generic regex pass above. Keyed by the sender's email address.
+_PARSERS: dict[str, "callable"] = {}
+
+
+def _sender_email(headers: dict) -> str:
+    raw = headers.get("From", "")
+    m = re.search(r"[\w.+-]+@[\w-]+\.[\w.-]+", raw)
+    return m.group(0).lower() if m else ""
 
 
 def fetch(gmail_cfg: dict) -> list[Startup]:
@@ -141,7 +167,8 @@ def fetch(gmail_cfg: dict) -> list[Startup]:
         headers = {h["name"]: h["value"] for h in msg.get("payload", {}).get("headers", [])}
         subject = headers.get("Subject", "")
         body = _extract_body(msg.get("payload", {}))
-        startups.extend(_parse_body(body, subject))
+        parser = _PARSERS.get(_sender_email(headers), _parse_body)
+        startups.extend(parser(body, subject))
         new_ids.append(msg_id)
 
     database.mark_processed("gmail", new_ids)
